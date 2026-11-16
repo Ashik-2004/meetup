@@ -135,12 +135,20 @@ test('public event hides organizer contact and coordinator data is access-contro
   assert.equal(attendeeDashboard.response.status, 403);
   const coordinatorDashboard = await request('/api/coordinator/dashboard', { cookie: users.coordinator.cookie });
   assert.equal(coordinatorDashboard.response.status, 200);
-  assert.equal('attendees' in coordinatorDashboard.payload.events[0], false);
-  assert.equal(coordinatorDashboard.payload.events[0].aggregates.suppressed, true);
-  assert.deepEqual(coordinatorDashboard.payload.events[0].aggregates.byCity, {});
+  const dashboardEvent = coordinatorDashboard.payload.events[0];
+  assert.deepEqual(Object.keys(dashboardEvent).sort(), ['aggregates', 'announcements', 'attendees', 'event'].sort());
+  assert.deepEqual([...dashboardEvent.attendees].sort(), ['Coordinator', 'Alice Example', 'Bea Example', 'Carl Example'].sort());
+  assert.ok(dashboardEvent.attendees.every((attendee) => typeof attendee === 'string'));
+  assert.equal(dashboardEvent.aggregates.suppressed, true);
+  assert.deepEqual(dashboardEvent.aggregates.byCity, {});
+  assert.deepEqual(dashboardEvent.aggregates.byMode, {});
   assert.equal(JSON.stringify(coordinatorDashboard.payload).includes(users.alice.email), false);
-  assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('Alice Example'), false);
+  assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('Alice Example hello'), false);
   assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('Kakkanad'), false);
+  assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('Train'), false);
+  assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('Research'), false);
+  assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('private-contact@example.test'), false);
+  assert.equal(JSON.stringify(coordinatorDashboard.payload).includes('lookingForCompanion'), false);
   const dashboardPage = await request('/api/coordinator/dashboard?limit=1&offset=0', { cookie: users.coordinator.cookie });
   assert.equal(dashboardPage.response.status, 200);
   assert.equal(dashboardPage.payload.events.length, 1);
@@ -191,6 +199,44 @@ test('event lists and match candidates enforce bounded pagination', async () => 
   assert.equal((await request('/api/events?offset=-1')).response.status, 400);
   const tooManyMatches = await request(`/api/events/${event.slug}/matches?limit=51`, { cookie: users.alice.cookie });
   assert.equal(tooManyMatches.response.status, 400);
+});
+
+test('coordinator attendee rosters are isolated per event and owner while aggregates remain thresholded', async () => {
+  const secondaryCreated = await createFixtureEvent(users.coordinator, 'Same owner secondary event');
+  assert.equal(secondaryCreated.response.status, 201, JSON.stringify(secondaryCreated.payload));
+  const secondaryEvent = secondaryCreated.payload.event;
+  const eventOnlyAttendee = await register('EventTwoAttendee');
+  await saveProfile(eventOnlyAttendee, { name: 'Event Two Attendee' });
+  for (const member of [users.coordinator, users.alice, users.bea, users.carl, eventOnlyAttendee]) {
+    await joinAndSetTravelInEvent(member, secondaryEvent, 'Kakkanad');
+  }
+
+  const otherCoordinator = await register('OtherCoordinator');
+  db.prepare("UPDATE users SET role = 'coordinator' WHERE id = ?").run(otherCoordinator.id);
+  const otherEventCreated = await createFixtureEvent(otherCoordinator, 'Other owner event');
+  assert.equal(otherEventCreated.response.status, 201, JSON.stringify(otherEventCreated.payload));
+  const otherEvent = otherEventCreated.payload.event;
+  const otherOwnerAttendee = await register('OtherOwnerAttendee');
+  await saveProfile(otherOwnerAttendee, { name: 'Other Owner Attendee' });
+  await joinAndSetTravelInEvent(otherOwnerAttendee, otherEvent, 'Edapally');
+
+  const ownerDashboard = await request('/api/coordinator/dashboard?limit=50&offset=0', { cookie: users.coordinator.cookie });
+  assert.equal(ownerDashboard.response.status, 200);
+  const ownEvents = new Map(ownerDashboard.payload.events.map((entry) => [entry.event.slug, entry]));
+  assert.deepEqual([...ownEvents.keys()].sort(), [event.slug, secondaryEvent.slug].sort());
+  assert.deepEqual([...ownEvents.get(secondaryEvent.slug).attendees].sort(), ['Coordinator', 'Alice Example', 'Bea Example', 'Carl Example', 'Event Two Attendee'].sort());
+  assert.equal(ownEvents.get(event.slug).attendees.includes('Event Two Attendee'), false);
+  assert.equal(ownEvents.get(secondaryEvent.slug).aggregates.suppressed, false);
+  assert.deepEqual(ownEvents.get(secondaryEvent.slug).aggregates.byCity, { Kochi: 5 });
+  assert.deepEqual(ownEvents.get(secondaryEvent.slug).aggregates.byMode, { Train: 5 });
+  assert.equal(JSON.stringify(ownerDashboard.payload).includes('Other Owner Attendee'), false);
+
+  const otherDashboard = await request('/api/coordinator/dashboard?limit=50&offset=0', { cookie: otherCoordinator.cookie });
+  assert.equal(otherDashboard.response.status, 200);
+  assert.deepEqual(otherDashboard.payload.events.map((entry) => entry.event.slug), [otherEvent.slug]);
+  assert.deepEqual(otherDashboard.payload.events[0].attendees, ['Other Owner Attendee']);
+  assert.equal(JSON.stringify(otherDashboard.payload).includes('Alice Example'), false);
+  assert.equal(JSON.stringify(otherDashboard.payload).includes('Event Two Attendee'), false);
 });
 
 test('matching uses real same-event members and requires mutual gender preferences', async () => {
@@ -504,6 +550,9 @@ test('event cancellation expires pending requests and revokes accepted chat acce
   const cancelled = await request(`/api/events/${cancellationEvent.slug}`, { method: 'PATCH', cookie: users.coordinator.cookie, body: { status: 'cancelled' } });
   assert.equal(cancelled.response.status, 200);
   assert.equal(cancelled.payload.event.status, 'cancelled');
+  assert.equal((await request(`/api/events/${cancellationEvent.slug}/matches`, { cookie: users.alice.cookie })).response.status, 409);
+  assert.equal((await request('/api/requests', { method: 'POST', cookie: users.alice.cookie, body: { userRef: carlRef, consentConfirmed: true } })).response.status, 409);
+  assert.equal((await request(`/api/events/${cancellationEvent.slug}/travel`, { method: 'PUT', cookie: users.alice.cookie, body: {} })).response.status, 409);
   assert.equal(db.prepare('SELECT status FROM connection_requests WHERE id = ?').get(requestId).status, 'disconnected');
   assert.equal(db.prepare('SELECT status FROM connection_requests WHERE id = ?').get(pendingRequest.payload.request.id).status, 'expired');
   assert.equal((await request(`/api/requests/${pendingRequest.payload.request.id}/respond`, { method: 'POST', cookie: dina.cookie, body: { action: 'accept' } })).response.status, 409);

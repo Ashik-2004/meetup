@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearAccountScopedState, isCurrentAuthResponse, isLikelyDetailedAddress, normalizeMatchGenders, publicLandingEvents } from './sessionPolicy.js';
+import { clearAccountScopedState, clearInactiveEventState, eventMatchingStatus, isCurrentAuthResponse, isEventMatchingEnabled, isLikelyDetailedAddress, isMatchingActionDisabled, normalizeMatchGenders, publicLandingEvents } from './sessionPolicy.js';
 import { consentPolicy } from './consentConfig.js';
 
 test('signed-out public landing data excludes private event cards', () => {
@@ -10,6 +10,55 @@ test('signed-out public landing data excludes private event cards', () => {
     { slug: 'private-joined', visibility: 'private' },
   ];
   assert.deepEqual(publicLandingEvents(events).map((event) => event.slug), ['public-one']);
+});
+
+test('cancelled and inactive events never display matching as enabled', () => {
+  const cancelled = { status: 'cancelled', travel: { lookingForCompanion: true } };
+  const postponed = { status: 'postponed', travel: { lookingForCompanion: true } };
+  const active = { status: 'active', travel: { lookingForCompanion: true } };
+  assert.equal(isEventMatchingEnabled(cancelled), false);
+  assert.equal(isMatchingActionDisabled(cancelled), true);
+  assert.equal(isMatchingActionDisabled(active), false);
+  assert.deepEqual(eventMatchingStatus(cancelled), { enabled: false, label: 'Event cancelled — matching paused' });
+  assert.deepEqual(eventMatchingStatus(postponed), { enabled: false, label: 'Matching unavailable' });
+  assert.deepEqual(eventMatchingStatus(active), { enabled: true, label: 'Matching on' });
+  assert.deepEqual(eventMatchingStatus({ status: 'active', travel: { lookingForCompanion: false } }), { enabled: false, label: 'Community only' });
+});
+
+test('cancelling an event immediately clears its rendered profile, chat, discovery, and consent state', () => {
+  const cleared = clearInactiveEventState({
+    connections: [
+      { id: 'cancelled-link', eventSlug: 'cancelled-event', profile: { name: 'Private Cancelled Profile' } },
+      { id: 'active-link', eventSlug: 'active-event', profile: { name: 'Active Profile' } },
+    ],
+    connectionsNextOffset: 20,
+    selectedConnection: 'cancelled-link',
+    messages: [{ body: 'Private cancelled-event chat text' }],
+    messagesNextOffset: 30,
+    discoverSlug: 'cancelled-event',
+    matches: [{ alias: 'Private cancelled-event match' }],
+    matchesNextOffset: 25,
+    matchMessage: 'Private cancelled-event recommendation state',
+    pendingMatch: { eventSlug: 'cancelled-event', userRef: 'private-reference' },
+    reportTarget: { eventSlug: 'cancelled-event', profile: { name: 'Report Target Profile' } },
+  }, ['cancelled-event']);
+
+  assert.deepEqual(cleared.connections.map((connection) => connection.id), ['active-link']);
+  assert.equal(cleared.connectionsNextOffset, null);
+  assert.equal(cleared.selectedConnection, '');
+  assert.deepEqual(cleared.messages, []);
+  assert.equal(cleared.messagesNextOffset, null);
+  assert.equal(cleared.reportTarget, null);
+  assert.equal(cleared.pendingMatch, null);
+  assert.equal(cleared.discoverSlug, '');
+  assert.deepEqual(cleared.matches, []);
+  assert.equal(cleared.matchesNextOffset, null);
+  assert.equal(cleared.matchMessage, '');
+  assert.equal(JSON.stringify(cleared).includes('Private Cancelled Profile'), false);
+  assert.equal(JSON.stringify(cleared).includes('Private cancelled-event chat text'), false);
+  assert.equal(JSON.stringify(cleared).includes('Report Target Profile'), false);
+  assert.equal(JSON.stringify(cleared).includes('Private cancelled-event match'), false);
+  assert.equal(JSON.stringify(cleared).includes('private-reference'), false);
 });
 
 test('sign-out reset clears account-scoped and event-detail data', () => {

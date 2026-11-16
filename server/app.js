@@ -526,6 +526,7 @@ export function createApp({ db: suppliedDb, dbFile, sessionSecret = process.env.
     if (!event) return res.status(404).json({ error: 'Event not found.' });
     const membership = db.prepare('SELECT * FROM event_members WHERE event_id = ? AND user_id = ?').get(event.id, req.user.id);
     if (!membership) return res.status(403).json({ error: 'Join this event before saving travel preferences.' });
+    if (event.status !== 'active') return res.status(409).json({ error: 'Travel preferences cannot be changed for an inactive event.' });
     const parsed = travelSchema.safeParse(req.body);
     if (!parsed.success) return sendValidationError(res, parsed);
     const data = parsed.data;
@@ -605,9 +606,10 @@ export function createApp({ db: suppliedDb, dbFile, sessionSecret = process.env.
     if (!parsed.success) return sendValidationError(res, parsed);
     const ref = findUserRef(db, req.user.id, parsed.data.userRef);
     if (!ref) return res.status(404).json({ error: 'That anonymous match is no longer available. Refresh recommendations.' });
+    const event = db.prepare('SELECT * FROM events WHERE id = ?').get(ref.event_id);
+    if (!event || event.status !== 'active') return res.status(409).json({ error: 'This event is not active.' });
     const eligible = pairEligibility(db, ref.event_id, req.user.id, ref.target_id);
     if (!eligible) return res.status(409).json({ error: 'This attendee is no longer an available compatible match.' });
-    const event = db.prepare('SELECT * FROM events WHERE id = ?').get(ref.event_id);
     const requestId = id();
     const created = now();
     db.prepare(`INSERT INTO connection_requests (id, event_id, requester_id, recipient_id, status, created_at, requester_consented_at, expires_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`)
@@ -858,7 +860,7 @@ export function createApp({ db: suppliedDb, dbFile, sessionSecret = process.env.
     if (!page) return;
     const events = db.prepare('SELECT * FROM events WHERE owner_id = ? ORDER BY event_date ASC, id ASC LIMIT ? OFFSET ?').all(req.user.id, page.limit, page.offset);
     const dashboard = events.map((event) => {
-      const memberRows = db.prepare('SELECT u.city, em.travel FROM event_members em JOIN users u ON u.id = em.user_id WHERE em.event_id = ?').all(event.id);
+      const memberRows = db.prepare('SELECT u.name, u.city, em.travel FROM event_members em JOIN users u ON u.id = em.user_id WHERE em.event_id = ? ORDER BY em.joined_at ASC, em.user_id ASC').all(event.id);
       const rawByCity = {};
       const rawByMode = {};
       for (const row of memberRows) {
@@ -873,6 +875,7 @@ export function createApp({ db: suppliedDb, dbFile, sessionSecret = process.env.
       const byMode = suppressed ? {} : Object.fromEntries(Object.entries(rawByMode).filter(([, count]) => count >= threshold));
       return {
         event: baseEvent(db, event, req.user.id),
+        attendees: memberRows.map((row) => row.name),
         aggregates: { minimumGroupSize: threshold, suppressed, byCity, byMode },
         announcements: db.prepare('SELECT COUNT(*) AS count FROM announcements WHERE event_id = ?').get(event.id).count,
       };

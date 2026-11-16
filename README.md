@@ -62,10 +62,11 @@ No third-party service, analytics, external font, email provider, or file storag
 
 - Public landing and event invitation details; signed-out landing cards include only public events; private event links; event registration/open-capacity state.
 - Attendee registration with optional profile setup and explicit opt-in to matching; public registration cannot assign coordinator or moderator access.
-- Coordinator event creation, editing, registration controls, cancellation, and owner announcements; coordinator dashboards show only privacy-thresholded city/travel aggregates, not named attendee rosters.
+- Coordinator event creation, editing, registration controls, cancellation, and owner announcements; dashboards list registered attendees by name only, separately from city/travel aggregates that are suppressed below the five-person threshold. Attendee contact details, profile fields, localities, travel methods, and matching status are not included in the roster.
 - Event membership remains separate from opting into travel matching. An event owner can read and post announcements without joining; announcement history is limited to the event owner and current members.
 - Real same-event matching only when both users opted in and their gender preferences, travel modes, and driver-reported seat counts are compatible; no fabricated recommendations.
 - Anonymous request inbox, accept/decline/cancel/expiry, block/report, disconnect, and chat that is inaccessible before recorded consent and acceptance. Blocked-pair requests are excluded from both inboxes.
+- Cancelled events pause matching, reject stale recommendation references and travel updates, expire pending requests, and revoke accepted chat/profile access.
 - Moderator-only report list, detail, and status-review actions, with audit records for report access and status changes. Reports are bound to verified request/event context and protected by duplicate and idempotency controls.
 - Strict calendar-date and time validation, and bounded, paginated, throttled reads for events, matches, requests, connections, chat history, announcements, coordinator data, and reports.
 - Responsive loading, error, success, and empty states; keyboard focus styles and reduced-motion handling. The mobile navigation moves focus into the sidebar and returns it to the menu control when closed.

@@ -4,6 +4,47 @@ export function publicLandingEvents(events = []) {
   return events.filter((event) => event?.visibility === 'public');
 }
 
+export function isEventMatchingEnabled(event, travel = event?.travel) {
+  return !isMatchingActionDisabled(event) && travel?.lookingForCompanion === true;
+}
+
+export function isMatchingActionDisabled(event) {
+  return event?.status !== 'active';
+}
+
+export function eventMatchingStatus(event, travel = event?.travel) {
+  if (event?.status === 'cancelled') return { enabled: false, label: 'Event cancelled — matching paused' };
+  const enabled = isEventMatchingEnabled(event, travel);
+  return {
+    enabled,
+    label: enabled ? 'Matching on' : travel?.lookingForCompanion ? 'Matching unavailable' : 'Community only',
+  };
+}
+
+export function clearInactiveEventState(state, inactiveEventSlugs = []) {
+  const inactive = new Set(inactiveEventSlugs);
+  if (!inactive.size) return state;
+  const previousConnections = state.connections || [];
+  const connections = previousConnections.filter((connection) => !inactive.has(connection.eventSlug));
+  const selected = previousConnections.find((connection) => connection.id === state.selectedConnection);
+  const clearSelected = Boolean(selected && inactive.has(selected.eventSlug));
+  const clearDiscovery = inactive.has(state.discoverSlug);
+  return {
+    ...state,
+    connections,
+    connectionsNextOffset: connections.length < previousConnections.length ? null : state.connectionsNextOffset,
+    selectedConnection: clearSelected ? '' : state.selectedConnection,
+    messages: clearSelected ? [] : state.messages,
+    messagesNextOffset: clearSelected ? null : state.messagesNextOffset,
+    reportTarget: state.reportTarget && inactive.has(state.reportTarget.eventSlug) ? null : state.reportTarget,
+    pendingMatch: state.pendingMatch && inactive.has(state.pendingMatch.eventSlug) ? null : state.pendingMatch,
+    discoverSlug: clearDiscovery ? '' : state.discoverSlug,
+    matches: clearDiscovery ? [] : state.matches,
+    matchesNextOffset: clearDiscovery ? null : state.matchesNextOffset,
+    matchMessage: clearDiscovery ? '' : state.matchMessage,
+  };
+}
+
 export function normalizeMatchGenders(values = []) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.filter((value) => genderValues.has(value)))];
