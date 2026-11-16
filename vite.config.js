@@ -7,8 +7,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    allowedHosts: ['.manus.computer'],
-    proxy: { '/api': 'http://127.0.0.1:3001' },
+    allowedHosts: ['localhost', '127.0.0.1', '.manus.computer'],
+    proxy: { '/api': { target: 'http://127.0.0.1:3001', changeOrigin: false } },
   },
   build: { outDir: '../dist', emptyOutDir: true },
 });

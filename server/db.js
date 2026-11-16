@@ -59,6 +59,7 @@ export function createDatabase(file = process.env.DB_FILE || path.resolve('data/
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS events_date_idx ON events(event_date);
+    CREATE INDEX IF NOT EXISTS events_owner_date_idx ON events(owner_id, event_date, id);
 
     CREATE TABLE IF NOT EXISTS event_members (
       event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
@@ -68,6 +69,7 @@ export function createDatabase(file = process.env.DB_FILE || path.resolve('data/
       PRIMARY KEY (event_id, user_id)
     );
     CREATE INDEX IF NOT EXISTS event_members_user_idx ON event_members(user_id);
+    CREATE INDEX IF NOT EXISTS event_members_event_joined_idx ON event_members(event_id, joined_at, user_id);
 
     CREATE TABLE IF NOT EXISTS recommendation_refs (
       ref TEXT PRIMARY KEY,
@@ -125,6 +127,37 @@ export function createDatabase(file = process.env.DB_FILE || path.resolve('data/
       created_at TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'reviewing', 'resolved'))
     );
+    CREATE INDEX IF NOT EXISTS reports_status_created_idx ON reports(status, created_at DESC, id DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS reports_open_dedupe_idx
+      ON reports(reporter_id, target_id, COALESCE(event_id, ''), COALESCE(request_id, ''), reason)
+      WHERE status IN ('open', 'reviewing');
+
+    CREATE TABLE IF NOT EXISTS report_idempotency (
+      reporter_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      payload_hash TEXT NOT NULL,
+      report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (reporter_id, idempotency_key)
+    );
+    CREATE INDEX IF NOT EXISTS report_idempotency_report_idx ON report_idempotency(report_id);
+
+    CREATE TABLE IF NOT EXISTS moderators (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      provisioned_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      actor_type TEXT NOT NULL,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      details TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS audit_entity_created_idx ON audit_log(entity_type, entity_id, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS announcements (
       id TEXT PRIMARY KEY,
