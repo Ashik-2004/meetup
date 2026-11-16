@@ -63,10 +63,10 @@ async function joinAndSetTravel(user, modes = ['Train']) {
   assert.equal(result.response.status, 200, JSON.stringify(result.payload));
 }
 
-async function createFixtureEvent(owner, name, visibility = 'public', { date = '2027-06-15', startTime = '09:00', endTime = '' } = {}) {
+async function createFixtureEvent(owner, name, visibility = 'public', { date = '2027-06-15', startTime = '09:00', endTime = '', coverUrl = '', registrationLink = '', capacity = null, description = `Synthetic ${name} event.` } = {}) {
   return request('/api/events', {
     method: 'POST', cookie: owner.cookie,
-    body: { name, description: `Synthetic ${name} event.`, category: 'QA', venueName: 'Test Hall', venueAddress: 'Test City', mapUrl: 'https://maps.example.test/test', eventDate: date, startTime, endTime, registrationLink: '', capacity: null, visibility, organizerName: 'Synthetic Organizer', organizerContact: '' },
+    body: { name, description, category: 'QA', coverUrl, venueName: 'Test Hall', venueAddress: 'Test City', mapUrl: 'https://maps.example.test/test', eventDate: date, startTime, endTime, registrationLink, capacity, visibility, organizerName: 'Synthetic Organizer', organizerContact: '' },
   });
 }
 
@@ -306,6 +306,14 @@ test('blocks close requests and chat on the server without returning the other i
   assert.equal(JSON.stringify(alicePendingInbox.payload).includes(pendingId), false);
   assert.equal(JSON.stringify(coordinatorPendingInbox.payload).includes(pendingId), false);
   assert.equal((await request(`/api/requests/${pendingId}/respond`, { method: 'POST', cookie: users.coordinator.cookie, body: { action: 'accept' } })).response.status, 409);
+  const coordinatorBlock = (await request('/api/blocks', { cookie: users.alice.cookie })).payload.blocks[0];
+  assert.ok(coordinatorBlock);
+  assert.equal((await request(`/api/blocks/${coordinatorBlock.id}`, { method: 'DELETE', cookie: users.alice.cookie })).response.status, 200);
+  for (const user of [users.alice, users.coordinator]) {
+    const inboxAfterUnblock = await request('/api/requests?limit=20&offset=0', { cookie: user.cookie });
+    assert.equal(JSON.stringify(inboxAfterUnblock.payload).includes(pendingId), false);
+  }
+  assert.equal(db.prepare('SELECT status FROM connection_requests WHERE id = ?').get(pendingId).status, 'blocked');
 
   const connectionResponse = await request('/api/connections', { cookie: users.alice.cookie });
   const connection = connectionResponse.payload.connections.find((item) => item.id === acceptedRequestId);
@@ -339,6 +347,14 @@ test('blocks close requests and chat on the server without returning the other i
   assert.equal(chat.response.status, 403);
   const matches = await request(`/api/events/${event.slug}/matches`, { cookie: users.alice.cookie });
   assert.equal(matches.payload.matches.some((match) => db.prepare('SELECT target_id FROM recommendation_refs WHERE ref = ?').get(match.userRef)?.target_id === db.prepare('SELECT id FROM users WHERE email = ?').get(users.bea.email).id), false);
+  const beaBlock = (await request('/api/blocks', { cookie: users.alice.cookie })).payload.blocks[0];
+  assert.ok(beaBlock);
+  assert.equal((await request(`/api/blocks/${beaBlock.id}`, { method: 'DELETE', cookie: users.alice.cookie })).response.status, 200);
+  for (const user of [users.alice, users.bea]) {
+    const inboxAfterUnblock = await request('/api/requests?limit=20&offset=0', { cookie: user.cookie });
+    assert.equal(JSON.stringify(inboxAfterUnblock.payload).includes(connection.id), false);
+  }
+  assert.equal(db.prepare('SELECT status FROM connection_requests WHERE id = ?').get(connection.id).status, 'blocked');
 });
 
 test('report references cannot be combined with a request from another event', async () => {
@@ -423,6 +439,44 @@ test('event dates must be calendar-valid and event times must be valid and order
   assert.equal(sameTime.response.status, 400);
   const patchBackwards = await request(`/api/events/${event.slug}`, { method: 'PATCH', cookie: users.coordinator.cookie, body: { startTime: '12:00', endTime: '11:00' } });
   assert.equal(patchBackwards.response.status, 400);
+});
+
+test('partial event edits and cancellation preserve private visibility and omitted fields', async () => {
+  const retainedFields = {
+    endTime: '11:30',
+    coverUrl: 'https://images.example.test/synthetic-cover.jpg',
+    registrationLink: 'https://register.example.test/synthetic-event',
+    capacity: 37,
+  };
+  const editedResult = await createFixtureEvent(users.coordinator, 'Private description patch', 'private', retainedFields);
+  assert.equal(editedResult.response.status, 201, JSON.stringify(editedResult.payload));
+  const edited = await request(`/api/events/${editedResult.payload.event.slug}`, {
+    method: 'PATCH', cookie: users.coordinator.cookie, body: { description: 'Updated synthetic description only.' },
+  });
+  assert.equal(edited.response.status, 200, JSON.stringify(edited.payload));
+  assert.equal(edited.payload.event.description, 'Updated synthetic description only.');
+  assert.equal(edited.payload.event.visibility, 'private');
+  assert.equal(edited.payload.event.endTime, retainedFields.endTime);
+  assert.equal(edited.payload.event.coverUrl, retainedFields.coverUrl);
+  assert.equal(edited.payload.event.registrationLink, retainedFields.registrationLink);
+  assert.equal(edited.payload.event.capacity, retainedFields.capacity);
+
+  const cancelledResult = await createFixtureEvent(users.coordinator, 'Private status patch', 'private', retainedFields);
+  assert.equal(cancelledResult.response.status, 201, JSON.stringify(cancelledResult.payload));
+  const cancelled = await request(`/api/events/${cancelledResult.payload.event.slug}`, {
+    method: 'PATCH', cookie: users.coordinator.cookie, body: { status: 'cancelled' },
+  });
+  assert.equal(cancelled.response.status, 200, JSON.stringify(cancelled.payload));
+  assert.equal(cancelled.payload.event.status, 'cancelled');
+  assert.equal(cancelled.payload.event.registrationOpen, false);
+  assert.equal(cancelled.payload.event.visibility, 'private');
+  assert.equal(cancelled.payload.event.endTime, retainedFields.endTime);
+  assert.equal(cancelled.payload.event.coverUrl, retainedFields.coverUrl);
+  assert.equal(cancelled.payload.event.registrationLink, retainedFields.registrationLink);
+  assert.equal(cancelled.payload.event.capacity, retainedFields.capacity);
+
+  const publicEvents = await request('/api/events');
+  assert.equal(publicEvents.payload.events.some((item) => [editedResult.payload.event.slug, cancelledResult.payload.event.slug].includes(item.slug)), false);
 });
 
 test('event cancellation expires pending requests and revokes accepted chat access', async () => {

@@ -474,7 +474,7 @@ export function createApp({ db: suppliedDb, dbFile, sessionSecret = process.env.
       mapUrl: 'map_url', eventDate: 'event_date', startTime: 'start_time', endTime: 'end_time', registrationLink: 'registration_link', capacity: 'capacity',
       visibility: 'visibility', organizerName: 'organizer_name', organizerContact: 'organizer_contact', status: 'status', registrationOpen: 'registration_open',
     };
-    const changes = { ...parsed.data };
+    const changes = Object.fromEntries(Object.entries(parsed.data).filter(([key]) => Object.hasOwn(req.body, key)));
     if (changes.status === 'cancelled') changes.registrationOpen = false;
     const assignments = [];
     const values = [];
@@ -625,6 +625,7 @@ export function createApp({ db: suppliedDb, dbFile, sessionSecret = process.env.
         CASE WHEN r.requester_id = ? THEN 'outgoing' ELSE 'incoming' END AS direction
       FROM connection_requests r JOIN events e ON e.id = r.event_id
       WHERE (r.requester_id = ? OR r.recipient_id = ?) AND r.status <> 'accepted'
+        AND r.status <> 'blocked'
         AND NOT EXISTS (SELECT 1 FROM blocks b WHERE (b.blocker_id = r.requester_id AND b.blocked_id = r.recipient_id) OR (b.blocker_id = r.recipient_id AND b.blocked_id = r.requester_id))
       ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?
     `).all(req.user.id, req.user.id, req.user.id, req.user.id, page.limit, page.offset);
